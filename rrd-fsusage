@@ -1,0 +1,354 @@
+#!/usr/bin/perl
+
+use v5.10;
+use strict;
+use warnings;
+use RRDTool::OO;
+use Path::Tiny;
+use FindBin qw($Bin);
+use POSIX qw(strftime);
+use Template;
+
+
+#--- definitions
+
+# directory, where the rrd files will be stored; this can be absoulte path,
+# relative path or undefined
+my $rrddir = 'rrd';
+
+# directory where images and HTML files will be created
+my $dstdir = 'html';
+
+# graph dimensions
+my ($img_w, $img_h) = (800, 160);
+
+
+#==============================================================================
+#=== FUNCTIONS ================================================================
+#==============================================================================
+
+sub get_location
+{
+  my $dir = shift;
+  my $path = path($Bin);
+  
+  # return default path if no argument
+  return $path if !$dir;
+  
+  # get absolute/relative path if argument is spefied
+  if(path($dir)->is_absolute) {
+    $path = path($dir);
+  } else {
+    $path = $path->child($dir);
+  }
+  
+  # ensure the resulting path's existence
+  if(!$path->exists) {
+    die "Directory " . $path . " does not exist";
+  }
+
+  # finish
+  return $path;
+}
+
+
+#==============================================================================
+#=== MAIN =====================================================================
+#==============================================================================
+
+#--- the first argument is filesystem mount point
+
+my ($fs) = @ARGV;
+die 'No fs mount point given' if !$fs;
+
+#--- get info using standard 'df' utility
+
+open(F, '-|', "df $fs") or die;
+my $l = <F>;
+$l = <F>;
+die 'Failed to get fs information' if !$l;
+chomp $l;
+
+my ($device, $total, $used, $avail) = split(/\s+/, $l);
+
+close(F);
+
+#--- get hostname
+
+open(F, '-|', 'hostname') || die;
+my $hostname = <F>;
+chomp($hostname);
+close(F);
+
+#--- get file system id
+
+# here we derive a name for the rrd file from the specified fs mount point
+
+my @fs_words = split(/\//, $fs);
+
+die 'fs spec must begin with a slash' if @fs_words && $fs_words[0] ne '';
+
+my $fs_id;
+if(@fs_words) {
+  $fs_id = join('-', grep { $_; } @fs_words);
+} else {
+  $fs_id = 'root';
+}
+
+#--- get location of the rrd file
+
+my $rrdfile = get_location($rrddir)->child("$fs_id.rrd");
+
+#--- get RRDTool::OO instance
+
+my $rrd = RRDTool::OO->new(
+  file => $rrdfile->canonpath,
+);
+
+#--- create RRD file it it does not already exist
+
+if(!$rrdfile->exists) {
+  $rrd->create(
+    step => 3600,
+    data_source => {
+      name => 'used',
+      type => 'GAUGE'
+    },
+    data_source => {
+      name => 'total',
+      type => 'GAUGE'
+    },
+    # 1 year of data of 1 hour samples
+    archive => {
+      cpoints => 1,
+      rows => 8766
+    },
+    # 20 years od data of 1 day samples
+    archive => {
+      cpoints => 24,
+      cfunc => 'AVERAGE',
+      rows => 7305
+    }
+  );
+}
+
+#--- update RRD database file
+
+$rrd->update(
+  values => {
+    used => $used,
+    total => $total
+  }
+);
+
+#--- create graphs
+
+my $dst = get_location($dstdir);
+
+$rrd->graph(
+  image => $dst->child("${fs_id}-week.png")->canonpath,
+  start => (time() - 7*24*3600),
+  end => time(),
+  lower_limit => 0,
+  upper_limit => ($total * 1024),
+  rigid => undef,
+  width => $img_w,
+  height => $img_h,
+  base => 1024,
+  draw => {
+    type => 'hidden',
+    dsname => 'used',
+    name => 'used',
+  },    
+  draw => {
+    type => 'hidden',
+    dsname => 'total',
+    name => 'total',
+  },    
+  draw => {
+    type => 'hidden',
+    name => 'used_bytes',
+    cdef => 'used,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'used_last',
+    vdef => 'used_bytes,LAST',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_bytes',
+    cdef => 'total,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_last',
+    vdef => 'total_bytes,LAST',
+  },
+  draw => {
+    type => 'area',
+    color => '00CC00',
+    cdef => 'used,1024,*',
+    legend => 'Used space '
+  },
+  gprint => {
+    draw => 'used_last',
+    format => '%3.1lf %s\l'
+  },
+  draw => {
+    type => 'line',
+    thickness => 1,
+    color => '888888',
+    cdef => 'total,1024,*',
+    legend => 'Total space'
+  },
+  gprint => {
+    draw => 'total_last',
+    format => '%3.1lf %s\l'
+  }
+);
+
+$rrd->graph(
+  image => $dst->child("${fs_id}-month.png")->canonpath,
+  start => (time() - 30*24*3600),
+  end => time(),
+  lower_limit => 0,
+  upper_limit => ($total * 1024),
+  rigid => undef,
+  width => $img_w,
+  height => $img_h,
+  base => 1024,
+  draw => {
+    type => 'hidden',
+    dsname => 'used',
+    name => 'used',
+  },    
+  draw => {
+    type => 'hidden',
+    dsname => 'total',
+    name => 'total',
+  },    
+  draw => {
+    type => 'hidden',
+    name => 'used_bytes',
+    cdef => 'used,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'used_last',
+    vdef => 'used_bytes,LAST',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_bytes',
+    cdef => 'total,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_last',
+    vdef => 'total_bytes,LAST',
+  },
+  draw => {
+    type => 'area',
+    color => '00CC00',
+    cdef => 'used,1024,*',
+    legend => 'Used space '
+  },
+  gprint => {
+    draw => 'used_last',
+    format => '%3.1lf %s\l'
+  },
+  draw => {
+    type => 'line',
+    thickness => 1,
+    color => '888888',
+    cdef => 'total,1024,*',
+    legend => 'Total space'
+  },
+  gprint => {
+    draw => 'total_last',
+    format => '%3.1lf %s\l'
+  }
+);
+
+$rrd->graph(
+  image => $dst->child("${fs_id}-year.png")->canonpath,
+  start => (time() - 365*24*3600),
+  end => time(),
+  lower_limit => 0,
+  upper_limit => ($total * 1024),
+  rigid => undef,
+  width => $img_w,
+  height => $img_h,
+  base => 1024,
+  draw => {
+    type => 'hidden',
+    dsname => 'used',
+    name => 'used',
+  },    
+  draw => {
+    type => 'hidden',
+    dsname => 'total',
+    name => 'total',
+  },    
+  draw => {
+    type => 'hidden',
+    name => 'used_bytes',
+    cdef => 'used,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'used_last',
+    vdef => 'used_bytes,LAST',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_bytes',
+    cdef => 'total,1024,*',
+  },
+  draw => {
+    type => 'hidden',
+    name => 'total_last',
+    vdef => 'total_bytes,LAST',
+  },
+  draw => {
+    type => 'area',
+    color => '00CC00',
+    cdef => 'used,1024,*',
+    legend => 'Used space '
+  },
+  gprint => {
+    draw => 'used_last',
+    format => '%3.1lf %s\l'
+  },
+  draw => {
+    type => 'line',
+    thickness => 1,
+    color => '888888',
+    cdef => 'total,1024,*',
+    legend => 'Total space'
+  },
+  gprint => {
+    draw => 'total_last',
+    format => '%3.1lf %s\l'
+  }
+);
+
+#--- create html file
+
+my $tt = Template->new({
+  ABSOLUTE => 1,
+  ENCODING => 'utf8',
+});
+
+$tt->process(
+  "$Bin/index.tt",
+  {
+    gentime => strftime('%c', localtime()),
+    fs_id => $fs_id,
+    host => $hostname,
+    mountpoint => $fs
+  },
+  "$dstdir/$fs_id.html",
+  { binmode => ':utf8' }
+) || die $tt->error(), "\n";

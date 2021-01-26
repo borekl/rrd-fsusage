@@ -1,0 +1,29 @@
+<!doctype html>
+
+<html>
+
+<head>
+  <title>Filesystem usage for [% mountpoint %] @ [% host %]</title>
+  <style>
+    .bold { font-weight: bold; }
+  </style>
+</head>
+
+<body>
+
+<h1>Filesystem usage for [% mountpoint %] @ [% host %]</h1>
+
+<p>Last updated: [% gentime %]</p>
+
+<p><span class="bold">Last week</span><br>
+<img src="[% fs_id %]-week.png"></p>
+
+<p><span class="bold">Last month</span><br>
+<img src="[% fs_id %]-month.png"></p>
+
+<p><span class="bold">Last year</span><br>
+<img src="[% fs_id %]-year.png"></p>
+
+</body>
+
+</html>
